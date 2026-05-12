@@ -1,42 +1,39 @@
-from rate import get_quote
-from auth import send_otp, verify_otp
+from transak import Transak
+from store import UserStore
+import secrets
 
 API_KEY = ""
+DSN = ""
+WALLET = ""
 EMAIL = ""
 
-quote = get_quote(
-	api_key=API_KEY,
-	fiat_currency="EUR",
-	crypto_currency="USDC",
-	fiat_amount=15000,
-	payment_method="sepa_bank_transfer",
-	network="stellar"
-)
+def login_or_resume(email):
+    session_secret = input("Session key (blank if new/forgotten): ").strip()
 
-    # Display results
-data = quote["data"]
-print(f"\n💰 Quote for {data['fiatAmount']} {data['fiatCurrency']}")
-print(f"You get: {data['cryptoAmount']} {data['cryptoCurrency']}")
-print(f"Total fee: {data['totalFee']} {data['fiatCurrency']}")
-print(f"Quote ID: {data['quoteId']}\n")
-#print(f"\nFee breakdown:")
-for fee in data["feeBreakdown"]:
-	print(f"{fee['name']}: {fee['value']} {data['fiatCurrency']}")
+    if session_secret:
+        token = store.get_token(email, session_secret)
+        if token is not None:
+            t.access_token = token
+            print(f"Resumed session for {email}")
+            return
+        print("Session key didn't match — re-verifying via OTP.")
+
+    login = t.send_otp(email)
+    otp = input("Enter code: ").strip()
+    t.verify_otp(email, otp, login["stateToken"])
+    session_secret = secrets.token_urlsafe(32)
+    store.save_user(email, t.access_token, session_secret)
+    print(f"Logged in {email}. Save this session key: {session_secret}")
 
 
-print(f"Sending OTP to {EMAIL}...")
-login_data = send_otp(API_KEY, EMAIL)
-state_token = login_data["stateToken"]
-print(f"OTP sent. State token expires in {login_data['expiresIn']}s")
-	
-# Step 2: User enters OTP from email
-otp = input("Enter OTP from email: ").strip()
-	
-# Step 3: Verify and get access token
-auth_data = verify_otp(API_KEY, EMAIL, otp, state_token)
-access_token = auth_data["accessToken"]
-	
-print(f"\n✓ Authenticated!")
-print(f"Access token (valid {auth_data['ttl']}s): {access_token[:40]}...")
+t = Transak(api_key=API_KEY)
+store = UserStore(dsn=DSN)
 
-#fastapi, postgresql
+try:
+    login_or_resume(EMAIL)
+    quote = t.get_quote("EUR", "USDC", 1000)
+    order = t.create_order(quote["quoteId"], WALLET, "sepa_bank_transfer")
+    t.confirm_order(order["id"], "sepa_bank_transfer")
+    print(f"Bought {quote['cryptoAmount']} USDC for 1000 EUR")
+finally:
+    store.close()
